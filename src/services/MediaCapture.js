@@ -27,6 +27,67 @@ class MediaCapture {
     this.lastScreenshotTime = 0;
   }
 
+  async setupSystemAudio() {
+    try {
+      if (this.systemAudioStream) {
+        this.systemAudioStream.getTracks().forEach((track) => track.stop());
+      }
+
+      console.log("🔊 Attempting to capture system audio separately...");
+
+      // Get available audio sources from Electron
+      const sources = await window.electronAPI.enumerateDevices();
+
+      // Look for audio sources (screens that might have audio)
+      const audioSources = sources.screens.filter(
+        (source) =>
+          source.name.toLowerCase().includes("audio") ||
+          source.name.toLowerCase().includes("sound") ||
+          source.name.toLowerCase().includes("entire screen")
+      );
+
+      if (audioSources.length === 0) {
+        console.warn("⚠️ No audio sources found");
+        return false;
+      }
+
+      const audioSource = audioSources[0];
+      console.log("🔊 Using audio source:", audioSource.name);
+
+      // Try to capture audio-only from the screen
+      const audioConstraints = {
+        audio: {
+          mandatory: {
+            chromeMediaSource: "desktop",
+            chromeMediaSourceId: audioSource.id,
+            echoCancellation: false,
+            noiseSuppression: false,
+            autoGainControl: false,
+            googEchoCancellation: false,
+            googNoiseSuppression: false,
+            googAutoGainControl: false,
+            googHighpassFilter: false,
+            googTypingNoiseDetection: false,
+          },
+        },
+      };
+
+      this.systemAudioStream = await navigator.mediaDevices.getUserMedia(
+        audioConstraints
+      );
+
+      const audioTracks = this.systemAudioStream.getAudioTracks();
+      console.log(
+        `✅ System audio capture successful - tracks: ${audioTracks.length}`
+      );
+
+      return true;
+    } catch (error) {
+      console.error("❌ System audio capture failed:", error);
+      return false;
+    }
+  }
+
   async setupMicrophone(deviceId) {
     try {
       if (this.microphoneStream) {
@@ -92,6 +153,14 @@ class MediaCapture {
             mandatory: {
               chromeMediaSource: "desktop",
               chromeMediaSourceId: source.id,
+              echoCancellation: false,
+              noiseSuppression: false,
+              autoGainControl: false,
+              googEchoCancellation: false,
+              googNoiseSuppression: false,
+              googAutoGainControl: false,
+              googHighpassFilter: false,
+              googTypingNoiseDetection: false,
             },
           },
           video: {
@@ -111,7 +180,18 @@ class MediaCapture {
         screenStream = await navigator.mediaDevices.getUserMedia(
           constraintsWithAudio
         );
-        console.log("Screen capture with audio successful");
+
+        // Check if we actually got audio
+        const audioTracks = screenStream.getAudioTracks();
+        console.log(
+          `Screen capture with audio successful - audio tracks: ${audioTracks.length}`
+        );
+
+        if (audioTracks.length > 0) {
+          console.log("✅ Desktop audio capture successful");
+        } else {
+          console.warn("⚠️ No audio tracks found in screen capture");
+        }
       } catch (audioError) {
         console.warn(
           "Audio capture failed, trying video-only:",
@@ -220,29 +300,90 @@ class MediaCapture {
         window.webkitAudioContext)();
       this.destination = this.audioContext.createMediaStreamDestination();
 
+      console.log("🎵 Combining audio streams...");
+
       // Add microphone audio if available
       if (this.microphoneStream) {
-        const micSource = this.audioContext.createMediaStreamSource(
-          this.microphoneStream
-        );
-        const micGain = this.audioContext.createGain();
-        micGain.gain.value = 0.8; // Adjust microphone volume
-        micSource.connect(micGain);
-        micGain.connect(this.destination);
+        const micTracks = this.microphoneStream.getAudioTracks();
+        console.log(`🎤 Microphone audio tracks: ${micTracks.length}`);
+
+        if (micTracks.length > 0) {
+          const micSource = this.audioContext.createMediaStreamSource(
+            this.microphoneStream
+          );
+          const micGain = this.audioContext.createGain();
+          micGain.gain.value = 0.8; // Adjust microphone volume
+          micSource.connect(micGain);
+          micGain.connect(this.destination);
+          console.log("✅ Microphone audio added to mix");
+        }
       }
 
-      // Add system audio if available
+      // Add system audio if available (from screen stream or separate audio stream)
+      let systemAudioAdded = false;
+
+      // First try system audio from screen stream
       if (this.screenStream) {
-        const systemAudioTrack = this.screenStream.getAudioTracks()[0];
-        if (systemAudioTrack) {
+        const systemAudioTracks = this.screenStream.getAudioTracks();
+        console.log(
+          `🔊 Screen stream audio tracks: ${systemAudioTracks.length}`
+        );
+
+        if (systemAudioTracks.length > 0) {
+          const systemAudioTrack = systemAudioTracks[0];
+          console.log(`🔊 Screen audio track details:`, {
+            id: systemAudioTrack.id,
+            label: systemAudioTrack.label,
+            kind: systemAudioTrack.kind,
+            enabled: systemAudioTrack.enabled,
+            muted: systemAudioTrack.muted,
+            readyState: systemAudioTrack.readyState,
+          });
+
           const systemSource = this.audioContext.createMediaStreamSource(
             new MediaStream([systemAudioTrack])
           );
           const systemGain = this.audioContext.createGain();
-          systemGain.gain.value = 0.6; // Adjust system audio volume
+          systemGain.gain.value = 1.0; // System audio volume
           systemSource.connect(systemGain);
           systemGain.connect(this.destination);
+          console.log("✅ Screen audio added to mix");
+          systemAudioAdded = true;
         }
+      }
+
+      // If no audio from screen stream, try separate system audio stream
+      if (!systemAudioAdded && this.systemAudioStream) {
+        const systemAudioTracks = this.systemAudioStream.getAudioTracks();
+        console.log(
+          `🔊 Separate system audio tracks: ${systemAudioTracks.length}`
+        );
+
+        if (systemAudioTracks.length > 0) {
+          const systemAudioTrack = systemAudioTracks[0];
+          console.log(`🔊 Separate audio track details:`, {
+            id: systemAudioTrack.id,
+            label: systemAudioTrack.label,
+            kind: systemAudioTrack.kind,
+            enabled: systemAudioTrack.enabled,
+            muted: systemAudioTrack.muted,
+            readyState: systemAudioTrack.readyState,
+          });
+
+          const systemSource = this.audioContext.createMediaStreamSource(
+            this.systemAudioStream
+          );
+          const systemGain = this.audioContext.createGain();
+          systemGain.gain.value = 1.0; // System audio volume
+          systemSource.connect(systemGain);
+          systemGain.connect(this.destination);
+          console.log("✅ Separate system audio added to mix");
+          systemAudioAdded = true;
+        }
+      }
+
+      if (!systemAudioAdded) {
+        console.warn("⚠️ No system audio available from any source");
       }
 
       // Create combined stream
@@ -278,9 +419,34 @@ class MediaCapture {
 
       this.recordedChunks = [];
 
-      const options = {
-        mimeType: "video/webm;codecs=vp9,opus",
-        videoBitsPerSecond: 8000000, // 8 Mbps
+      // Try different codec combinations for better compatibility
+      let options;
+      let mimeType;
+
+      // Test supported MIME types in order of preference
+      const mimeTypes = [
+        "video/webm;codecs=vp8,opus",
+        "video/webm;codecs=vp9,opus",
+        "video/webm;codecs=h264,opus",
+        "video/webm",
+      ];
+
+      for (const type of mimeTypes) {
+        if (MediaRecorder.isTypeSupported(type)) {
+          mimeType = type;
+          break;
+        }
+      }
+
+      if (!mimeType) {
+        throw new Error("No supported video MIME type found");
+      }
+
+      console.log(`📹 Using MIME type: ${mimeType}`);
+
+      options = {
+        mimeType: mimeType,
+        videoBitsPerSecond: 4000000, // 4 Mbps (reduced for stability)
         audioBitsPerSecond: 128000, // 128 kbps
       };
 
@@ -401,7 +567,27 @@ class MediaCapture {
         return null;
       }
 
+      console.log(
+        `📊 Processing ${this.recordedChunks.length} recorded chunks`
+      );
+
+      // Log chunk information
+      let totalSize = 0;
+      this.recordedChunks.forEach((chunk, index) => {
+        totalSize += chunk.size;
+        console.log(`Chunk ${index}: ${chunk.size} bytes, type: ${chunk.type}`);
+      });
+
+      console.log(
+        `📊 Total recording size: ${totalSize} bytes (${(
+          totalSize /
+          1024 /
+          1024
+        ).toFixed(2)} MB)`
+      );
+
       const blob = new Blob(this.recordedChunks, { type: "video/webm" });
+      console.log(`📦 Created blob: ${blob.size} bytes, type: ${blob.type}`);
 
       // Show save dialog (MP4 only)
       const result = await window.electronAPI.showSaveDialog({
@@ -409,13 +595,18 @@ class MediaCapture {
       });
 
       if (!result.canceled && result.filePath) {
+        console.log("💾 Converting to MP4...");
+
         // Always convert to MP4 using ffmpeg (handled by main process)
         const arrayBuffer = await blob.arrayBuffer();
+        console.log(`📦 ArrayBuffer created: ${arrayBuffer.byteLength} bytes`);
 
         // Ensure file path ends with .mp4
         const mp4FilePath = result.filePath.endsWith(".mp4")
           ? result.filePath
           : result.filePath + ".mp4";
+
+        console.log(`💾 Saving to: ${mp4FilePath}`);
 
         // Send ArrayBuffer directly to main process (always MP4 format)
         await window.electronAPI.saveRecording({
@@ -424,7 +615,7 @@ class MediaCapture {
           format: "mp4",
         });
 
-        console.log("Recording saved successfully to:", mp4FilePath);
+        console.log("✅ Recording saved successfully to:", mp4FilePath);
 
         // Call the callback if provided
         if (this.onRecordingSaved) {
@@ -436,7 +627,7 @@ class MediaCapture {
 
       return null;
     } catch (error) {
-      console.error("Error processing recording:", error);
+      console.error("❌ Error processing recording:", error);
 
       // Notify about recording error
       if (this.onRecordingError) {
@@ -566,6 +757,11 @@ class MediaCapture {
     if (this.screenStream) {
       this.screenStream.getTracks().forEach((track) => track.stop());
       this.screenStream = null;
+    }
+
+    if (this.systemAudioStream) {
+      this.systemAudioStream.getTracks().forEach((track) => track.stop());
+      this.systemAudioStream = null;
     }
 
     if (this.combinedStream) {

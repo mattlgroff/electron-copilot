@@ -268,6 +268,14 @@ export default function App() {
         await mediaCapture.setupMicrophone(currentDevices.microphone);
       }
       
+      // Setup system audio capture (try separate audio capture first)
+      const systemAudioSuccess = await mediaCapture.setupSystemAudio();
+      if (systemAudioSuccess) {
+        console.log("✅ System audio setup successful");
+      } else {
+        console.warn("⚠️ System audio setup failed, will try from screen capture");
+      }
+      
       // Setup screen capture with region (always use primary screen)
       await mediaCapture.setupScreenCapture(null, region);
       

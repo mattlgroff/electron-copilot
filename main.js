@@ -387,6 +387,10 @@ function convertWebmToMp4(inputPath, outputPath) {
       "yuv420p",
       "-movflags",
       "+faststart",
+      "-avoid_negative_ts",
+      "make_zero",
+      "-fflags",
+      "+genpts",
       "-y", // Overwrite output file
       outputPath,
     ];
@@ -419,10 +423,13 @@ function convertWebmToMp4(inputPath, outputPath) {
         );
         resolve(true);
       } else {
-        console.error("❌ Video conversion failed with code:", code);
+        console.error("❌ Primary video conversion failed with code:", code);
         console.error("FFmpeg stderr output:", stderrOutput);
         console.error("FFmpeg stdout output:", stdoutOutput);
-        resolve(false);
+
+        // Try fallback conversion with more compatible settings
+        console.log("🔄 Trying fallback conversion...");
+        tryFallbackConversion(inputPath, outputPath, resolve);
       }
     });
 
@@ -431,6 +438,67 @@ function convertWebmToMp4(inputPath, outputPath) {
       console.error("FFmpeg stderr output:", stderrOutput);
       resolve(false);
     });
+  });
+}
+
+function tryFallbackConversion(inputPath, outputPath, resolve) {
+  console.log("🔄 Attempting fallback conversion with simpler settings...");
+
+  const fallbackArgs = [
+    "-i",
+    inputPath,
+    "-c:v",
+    "libx264",
+    "-c:a",
+    "aac",
+    "-preset",
+    "ultrafast",
+    "-crf",
+    "28",
+    "-r",
+    "15", // Lower frame rate
+    "-s",
+    "1280x720", // Force resolution
+    "-y",
+    outputPath,
+  ];
+
+  console.log("Fallback FFmpeg command:", ffmpeg, fallbackArgs.join(" "));
+  const fallbackProcess = spawn(ffmpeg, fallbackArgs);
+
+  let fallbackStderr = "";
+  let fallbackStdout = "";
+
+  fallbackProcess.stderr.on("data", (data) => {
+    const output = data.toString();
+    fallbackStderr += output;
+    console.log("Fallback FFmpeg stderr:", output);
+  });
+
+  fallbackProcess.stdout.on("data", (data) => {
+    const output = data.toString();
+    fallbackStdout += output;
+    console.log("Fallback FFmpeg stdout:", output);
+  });
+
+  fallbackProcess.on("close", (code) => {
+    if (code === 0) {
+      console.log(
+        "✅ Fallback conversion successful - MP4 saved to:",
+        outputPath
+      );
+      resolve(true);
+    } else {
+      console.error("❌ Fallback conversion also failed with code:", code);
+      console.error("Fallback stderr output:", fallbackStderr);
+      console.error("Fallback stdout output:", fallbackStdout);
+      resolve(false);
+    }
+  });
+
+  fallbackProcess.on("error", (error) => {
+    console.error("❌ Fallback FFmpeg process error:", error);
+    resolve(false);
   });
 }
 
