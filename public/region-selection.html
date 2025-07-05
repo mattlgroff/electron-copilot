@@ -1,0 +1,318 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self' 'unsafe-inline'; style-src 'self' 'unsafe-inline'; connect-src 'self'; object-src 'none';" />
+    <title>Region Selection</title>
+    <style>
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+
+        body {
+            width: 100vw;
+            height: 100vh;
+            background: rgba(0, 0, 0, 0.3);
+            cursor: crosshair;
+            position: relative;
+            overflow: hidden;
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+        }
+
+        .overlay {
+            position: absolute;
+            top: 0;
+            left: 0;
+            width: 100%;
+            height: 100%;
+            background: rgba(0, 0, 0, 0.3);
+            pointer-events: none;
+        }
+
+        .display-boundary {
+            position: absolute;
+            border: 2px solid rgba(255, 255, 255, 0.5);
+            background: rgba(255, 255, 255, 0.05);
+            pointer-events: none;
+            z-index: 1;
+        }
+
+        .display-label {
+            position: absolute;
+            background: rgba(255, 255, 255, 0.9);
+            color: #333;
+            padding: 4px 8px;
+            border-radius: 4px;
+            font-size: 12px;
+            font-weight: bold;
+            pointer-events: none;
+            z-index: 2;
+        }
+
+        .selection-box {
+            position: absolute;
+            border: 2px dashed #ff4444;
+            background: rgba(255, 68, 68, 0.1);
+            pointer-events: none;
+            display: none;
+            z-index: 3;
+        }
+
+        .selection-info {
+            position: absolute;
+            background: rgba(0, 0, 0, 0.8);
+            color: white;
+            padding: 8px 12px;
+            border-radius: 4px;
+            font-size: 12px;
+            pointer-events: none;
+            display: none;
+            z-index: 4;
+        }
+
+        .instructions {
+            position: absolute;
+            top: 20px;
+            left: 50%;
+            transform: translateX(-50%);
+            background: rgba(0, 0, 0, 0.8);
+            color: white;
+            padding: 16px 24px;
+            border-radius: 8px;
+            text-align: center;
+            font-size: 14px;
+            z-index: 1000;
+        }
+
+        .instructions h3 {
+            margin-bottom: 8px;
+            font-size: 16px;
+        }
+
+        .instructions p {
+            margin-bottom: 4px;
+            opacity: 0.9;
+        }
+
+        .controls {
+            position: absolute;
+            bottom: 20px;
+            left: 50%;
+            transform: translateX(-50%);
+            display: flex;
+            gap: 12px;
+            z-index: 1000;
+        }
+
+        .btn {
+            padding: 8px 16px;
+            border: none;
+            border-radius: 4px;
+            cursor: pointer;
+            font-size: 14px;
+            transition: all 0.2s;
+        }
+
+        .btn-primary {
+            background: #ff4444;
+            color: white;
+        }
+
+        .btn-primary:hover {
+            background: #ff6666;
+        }
+
+        .btn-secondary {
+            background: rgba(255, 255, 255, 0.9);
+            color: #333;
+        }
+
+        .btn-secondary:hover {
+            background: white;
+        }
+
+        .btn:disabled {
+            opacity: 0.5;
+            cursor: not-allowed;
+        }
+    </style>
+</head>
+<body>
+    <div class="overlay"></div>
+    <div class="selection-box" id="selectionBox"></div>
+    <div class="selection-info" id="selectionInfo"></div>
+    
+    <div class="instructions">
+        <h3>Select Recording Region</h3>
+        <p>Click and drag to select the area you want to record</p>
+        <p>You can select from any display shown below</p>
+        <p>Press <strong>Enter</strong> to confirm selection or <strong>Escape</strong> to cancel</p>
+    </div>
+
+    <div class="controls">
+        <button class="btn btn-primary" id="confirmBtn" disabled>Confirm Selection</button>
+        <button class="btn btn-secondary" id="cancelBtn">Cancel</button>
+    </div>
+
+    <script>
+        let isSelecting = false;
+        let startX = 0;
+        let startY = 0;
+        let currentRegion = null;
+        let displays = [];
+
+        const selectionBox = document.getElementById('selectionBox');
+        const selectionInfo = document.getElementById('selectionInfo');
+        const confirmBtn = document.getElementById('confirmBtn');
+        const cancelBtn = document.getElementById('cancelBtn');
+
+        // Listen for display information from main process
+        if (window.electronAPI && window.electronAPI.onDisplayInfo) {
+            window.electronAPI.onDisplayInfo((event, displayInfo) => {
+                displays = displayInfo.displays;
+                drawDisplayBoundaries();
+            });
+        }
+
+        // Draw display boundaries to help users see multiple displays
+        function drawDisplayBoundaries() {
+            displays.forEach((display, index) => {
+                const boundary = document.createElement('div');
+                boundary.className = 'display-boundary';
+                boundary.style.left = display.bounds.x + 'px';
+                boundary.style.top = display.bounds.y + 'px';
+                boundary.style.width = display.bounds.width + 'px';
+                boundary.style.height = display.bounds.height + 'px';
+                document.body.appendChild(boundary);
+
+                const label = document.createElement('div');
+                label.className = 'display-label';
+                label.textContent = display.primary ? 'Primary Display' : `Display ${index + 1}`;
+                label.style.left = (display.bounds.x + 10) + 'px';
+                label.style.top = (display.bounds.y + 10) + 'px';
+                document.body.appendChild(label);
+            });
+        }
+
+        // Mouse events for region selection
+        document.addEventListener('mousedown', (e) => {
+            isSelecting = true;
+            startX = e.clientX;
+            startY = e.clientY;
+            
+            selectionBox.style.left = startX + 'px';
+            selectionBox.style.top = startY + 'px';
+            selectionBox.style.width = '0px';
+            selectionBox.style.height = '0px';
+            selectionBox.style.display = 'block';
+            
+            document.body.style.cursor = 'crosshair';
+        });
+
+        document.addEventListener('mousemove', (e) => {
+            if (!isSelecting) return;
+
+            const currentX = e.clientX;
+            const currentY = e.clientY;
+            
+            const left = Math.min(startX, currentX);
+            const top = Math.min(startY, currentY);
+            const width = Math.abs(currentX - startX);
+            const height = Math.abs(currentY - startY);
+
+            selectionBox.style.left = left + 'px';
+            selectionBox.style.top = top + 'px';
+            selectionBox.style.width = width + 'px';
+            selectionBox.style.height = height + 'px';
+
+            // Update info box
+            if (width > 0 && height > 0) {
+                selectionInfo.style.display = 'block';
+                selectionInfo.style.left = (left + width + 10) + 'px';
+                selectionInfo.style.top = top + 'px';
+                
+                // Find which display this selection is on
+                const displayInfo = findDisplayForRegion(left, top, width, height);
+                const displayText = displayInfo ? ` (${displayInfo.name})` : '';
+                
+                selectionInfo.textContent = `${width} × ${height}${displayText}`;
+                
+                currentRegion = { x: left, y: top, width, height, display: displayInfo };
+                confirmBtn.disabled = false;
+            } else {
+                selectionInfo.style.display = 'none';
+                confirmBtn.disabled = true;
+                currentRegion = null;
+            }
+        });
+
+        document.addEventListener('mouseup', () => {
+            isSelecting = false;
+            document.body.style.cursor = 'default';
+        });
+
+        // Find which display a region is primarily on
+        function findDisplayForRegion(x, y, width, height) {
+            let maxOverlap = 0;
+            let bestDisplay = null;
+
+            displays.forEach((display, index) => {
+                const overlapX = Math.max(0, Math.min(x + width, display.bounds.x + display.bounds.width) - Math.max(x, display.bounds.x));
+                const overlapY = Math.max(0, Math.min(y + height, display.bounds.y + display.bounds.height) - Math.max(y, display.bounds.y));
+                const overlapArea = overlapX * overlapY;
+
+                if (overlapArea > maxOverlap) {
+                    maxOverlap = overlapArea;
+                    bestDisplay = {
+                        ...display,
+                        name: display.primary ? 'Primary Display' : `Display ${index + 1}`
+                    };
+                }
+            });
+
+            return bestDisplay;
+        }
+
+        // Keyboard events
+        document.addEventListener('keydown', (e) => {
+            if (e.key === 'Enter' && currentRegion) {
+                confirmSelection();
+            } else if (e.key === 'Escape') {
+                cancelSelection();
+            }
+        });
+
+        // Button events
+        confirmBtn.addEventListener('click', confirmSelection);
+        cancelBtn.addEventListener('click', cancelSelection);
+
+        function confirmSelection() {
+            if (!currentRegion) return;
+
+            // Send region data to main process
+            if (window.electronAPI) {
+                window.electronAPI.setRegion(currentRegion);
+            }
+
+            // Close the window
+            window.close();
+        }
+
+        function cancelSelection() {
+            // Close the window without saving
+            window.close();
+        }
+
+        // Prevent right-click context menu
+        document.addEventListener('contextmenu', (e) => {
+            e.preventDefault();
+        });
+
+        // Focus the window when it opens
+        window.focus();
+    </script>
+</body>
+</html> 
